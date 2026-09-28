@@ -14,7 +14,6 @@ An end-to-end data engineering project that ingests banking data from **SQL Serv
 - [Dashboard](#dashboard)
 - [Repository Structure](#repository-structure)
 - [How to Run](#how-to-run)
-- [What I Added](#what-i-added)
 - [Known Limitations and Roadmap](#known-limitations-and-roadmap)
 - [Author](#author)
 
@@ -163,18 +162,6 @@ A Lakeview dashboard (`05_Dashboard/NeoBank_Dashboard.lvdash.json`) built on the
 6. **Import the dashboard:** import `NeoBank_Dashboard.lvdash.json` into Databricks Lakeview.
 7. **Email:** store a Gmail app password in the secret scope and change the sender and recipient addresses in the notification notebook.
 
-## What I Added
-
-> Fill this section with **your real contributions**. Interviewers will ask, and specific, honest answers are what make this project credible. Examples to replace or delete:
-
-- [ ] Added data cleaning in Silver (type casting, null handling, deduplication before MERGE)
-- [ ] Added data quality checks and a quarantine table for rejected records
-- [ ] Masked PII (PAN, email, phone) in Silver / Gold
-- [ ] Fixed audit logging bug (Bronze rows logged with the wrong layer)
-- [ ] Implemented SCD Type 2 for credit bureau history
-- [ ] Deployed with Databricks Asset Bundles
-- [ ] Extended the dataset or added a new source / gold table
-
 ## Known Limitations and Roadmap
 
 Being upfront about what would be improved for production use:
@@ -192,7 +179,3 @@ Being upfront about what would be improved for production use:
 
 **Your Name**
 [LinkedIn](https://linkedin.com/in/your-profile) · [GitHub](https://github.com/your-username) · your.email@example.com
-
-## Acknowledgements
-
-Based on the banking capstone from the [DataBeli Databricks course](https://github.com/databeli/databricks_course) by Narender Kumar.
