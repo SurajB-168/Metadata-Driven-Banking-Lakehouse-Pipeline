@@ -1,9 +1,6 @@
 # NeoBank Lakehouse: Metadata-Driven Banking Data Pipeline on Databricks
 
 An end-to-end data engineering project that ingests banking data from **SQL Server** (via JDBC) and **CSV files** (via Auto Loader) into a **Medallion (Bronze → Silver → Gold) Lakehouse** on Databricks. The pipeline is **metadata-driven**: each table's load strategy, primary key and watermark column are stored in control tables, not hardcoded in the notebooks. It supports incremental loads, per-run audit logging, email notifications and an executive dashboard.
-
-> **Note:** This project is based on the [DataBeli Databricks course](https://github.com/databeli/databricks_course) banking capstone. My own extensions and modifications are listed in [What I Added](#what-i-added).
-
 ---
 
 ## Table of Contents
