@@ -1,181 +1,118 @@
-# NeoBank Lakehouse: Metadata-Driven Banking Data Pipeline on Databricks
+# NeoBank Data Pipeline on Databricks
 
-An end-to-end data engineering project that ingests banking data from **SQL Server** (via JDBC) and **CSV files** (via Auto Loader) into a **Medallion (Bronze → Silver → Gold) Lakehouse** on Databricks. The pipeline is **metadata-driven**: each table's load strategy, primary key and watermark column are stored in control tables, not hardcoded in the notebooks. It supports incremental loads, per-run audit logging, email notifications and an executive dashboard.
----
+A beginner-friendly data engineering project. It takes raw banking data from **SQL Server** and **CSV files**, cleans it step by step in **Databricks**, and turns it into tables and a dashboard that a business team can use.
 
-## Table of Contents
-- [Architecture](#architecture)
-- [Tech Stack](#tech-stack)
-- [Key Features](#key-features)
-- [Data Sources](#data-sources)
-- [Metadata Framework](#metadata-framework)
-- [Pipeline Walkthrough](#pipeline-walkthrough)
-- [Gold Layer Tables](#gold-layer-tables)
-- [Dashboard](#dashboard)
-- [Repository Structure](#repository-structure)
-- [How to Run](#how-to-run)
-- [Known Limitations and Roadmap](#known-limitations-and-roadmap)
-- [Author](#author)
+The data is **made-up (synthetic)**. No real customer data is used.
 
 ---
 
-## Architecture
+## What problem does this solve?
+
+A bank keeps its data in different places: customer details, accounts, transactions, credit reports and payment logs. Raw data like this is hard to use for reports.
+
+This project collects all of it in one place, organizes it, and creates ready-to-use tables such as "how many customers does each branch have?" or "how many customers are high risk?".
+
+## How it works (Bronze, Silver, Gold)
+
+The project uses the **Medallion Architecture**, which has three layers:
+
+| Layer | What it means | What happens here |
+|---|---|---|
+| **Bronze** | Raw data | Data is copied from the sources as it is |
+| **Silver** | Clean data | Data is cleaned and made ready to use |
+| **Gold** | Business-ready data | Data is summarized into tables for reports and dashboards |
 
 ```
-┌──────────────────┐      JDBC (incremental, watermark-based)
-│   SQL Server     │ ──────────────────────────────┐
-│ customers        │                               │
-│ accounts         │                               ▼
-│ transactions     │                     ┌──────────────────┐
-│ branches         │                     │  BRONZE (Delta)  │  raw, append-only,
-└──────────────────┘                     │  banking.bronze  │  + insert_timestamp
-                                         └────────┬─────────┘
-┌──────────────────┐      Auto Loader              │
-│ Blob / Volume    │ ──────────────────────────────┤
-│ credit_bureau    │   (cloudFiles, availableNow)  │
-│ payment_gateway  │                               ▼
-└──────────────────┘                     ┌──────────────────┐
-                                         │  SILVER (Delta)  │  FULL / APPEND / MERGE
-                                         │  banking.silver  │  driven by metadata
-                                         └────────┬─────────┘
-                                                  │
-                                                  ▼
-                                         ┌──────────────────┐
-                                         │   GOLD (Delta)   │  business aggregates
-                                         │  banking.gold    │
-                                         └────────┬─────────┘
-                                                  │
-                          ┌───────────────────────┼───────────────────────┐
-                          ▼                       ▼                       ▼
-                 Lakeview Dashboard      Email run summary        Audit table
-                                                                (pipeline_runs)
-
-        Control plane: banking.metadata (tables, table_parameters,
-                       table_watermarks, pipeline_runs)
+SQL Server  ─┐
+             ├─►  Bronze  ─►  Silver  ─►  Gold  ─►  Dashboard
+CSV files   ─┘
 ```
 
-<!-- TODO: Replace with an architecture diagram image, e.g. ![Architecture](docs/architecture.png) -->
+A simple way to remember it:
+- Bronze: What data did we receive?
+- Silver: Can we trust and use this data?
+- Gold: What business answers can we get from it?
 
-## Tech Stack
+## Tools Used
 
-| Area | Tools |
-|---|---|
-| Platform | Databricks (Unity Catalog, Volumes, Jobs / Workflows) |
-| Processing | PySpark, Spark SQL, Structured Streaming (Auto Loader) |
-| Storage | Delta Lake |
-| Sources | SQL Server (JDBC), CSV files in Unity Catalog Volumes |
-| Security | Databricks Secret Scopes |
-| Orchestration | Databricks Jobs with task values |
-| Reporting | Databricks Lakeview (AI/BI) Dashboard |
-| Notifications | Python `smtplib` (HTML email) |
-
-## Key Features
-
-- **Metadata-driven ingestion:** adding a table means inserting rows into control tables, with no pipeline code changes.
-- **Three load strategies** configured per table: `FULL` (overwrite), `APPEND`, and `MERGE` (Delta upsert on the primary key).
-- **Incremental loading** with a high-watermark stored per table in `metadata.table_watermarks`.
-- **Two ingestion patterns:** JDBC batch reads from SQL Server and file ingestion with **Auto Loader** (`cloudFiles`, `trigger(availableNow=True)`, checkpointed).
-- **Operational audit trail:** every table load per layer per run is logged in `metadata.pipeline_runs` with start and end time, status, record count and error message.
-- **Secrets management:** database credentials are stored as a JSON secret in a Databricks Secret Scope. No credentials are in code.
-- **Run notification:** an HTML email summarises the status of every table load at the end of a run.
-- **Analytics layer:** five gold tables feed an executive dashboard.
+- **Databricks** to build and run the pipeline
+- **PySpark and SQL** to process the data
+- **Delta Lake** to store the tables
+- **SQL Server** as one data source
+- **CSV files** as the other data source
+- **Databricks Workflows (Jobs)** to run the steps in order
+- **Databricks Dashboard** to show the results
 
 ## Data Sources
 
-| Source | System | Tables / Files | Load Type | Watermark Column |
-|---|---|---|---|---|
-| SQL Server | `banking` schema | `customers` | MERGE | `updated_at` |
-| SQL Server | `banking` schema | `accounts` | MERGE | `updated_at` |
-| SQL Server | `banking` schema | `transactions` | APPEND | `txn_timestamp` |
-| SQL Server | `banking` schema | `branches` | FULL | none |
-| Blob / Volume (CSV) | Landing volume | `credit_bureau_reports` | MERGE | `bureau_pull_date` |
-| Blob / Volume (CSV) | Landing volume | `payment_gateway_logs` | APPEND | `processed_timestamp` |
-
-The dataset is synthetic. It includes a **historical load** and **incremental batches** (SQL insert scripts and `*_incremental.csv` files) so incremental logic can be demonstrated across runs.
-
-## Metadata Framework
-
-All behaviour is controlled by four Delta tables in `banking.metadata`:
-
-| Table | Purpose |
+| Source | Data |
 |---|---|
-| `tables` | Registry of logical tables: source system, schema, path, layer, active flag, load order |
-| `table_parameters` | Key/value config per table: `load_type`, `primary_key`, `watermark_column` |
-| `table_watermarks` | Last successfully processed watermark value per table |
-| `pipeline_runs` | Audit log: run id, table, layer, timings, status, row count, error message |
+| SQL Server | customers, accounts, transactions, branches |
+| CSV files | credit bureau reports, payment gateway logs |
 
-## Pipeline Walkthrough
+The project has a first (historical) load of data and a second smaller batch of new data. The second run loads only the new data, to show how updates are handled.
 
-1. **Setup** (`01_Setup_Metadata`): creates the catalog, schemas, volume and control tables, then seeds the metadata and initial watermarks.
-2. **Read table list** (`01_Read_Tables_List`): filters `metadata.tables` by `source_system` and `active_flag`, ordered by `load_order`, and publishes the list as a Databricks Jobs **task value**.
-3. **Read table parameters** (`02_Read_Table_Parameters`): fetches the load configuration for one table and publishes it as a task value.
-4. **Source → Bronze** (`03_Source_to_Bronze`):
-   - SQL Server: reads only rows newer than the last watermark over JDBC, using credentials from the secret scope.
-   - Blob: streams new CSV files with Auto Loader.
-   - Appends to `banking.bronze.<table>` with an `insert_timestamp`.
-5. **Bronze → Silver** (`04_Bronze_to_Silver`): applies the configured strategy (overwrite / append / Delta `MERGE`), advances the watermark, and writes the audit record in a `finally` block.
-6. **Silver → Gold** (`01_Silver_to_Gold_Driver`): logs the audit entry and runs the matching notebook in `gold_transformations/`.
-7. **Notify** (`04_Email_Notification`): builds an HTML summary from `pipeline_runs` for the run and emails it.
+## Main Features
 
-## Gold Layer Tables
+- Data comes from two kinds of sources: a database and files.
+- The data goes through three layers: Bronze, Silver and Gold.
+- The settings for each table (for example, whether to replace or add data) are kept in a small settings table, so they are not written inside the code.
+- Each run is recorded in a log table, so we can see what loaded and whether it succeeded.
+- Passwords are kept in Databricks secrets, not in the code.
+- A summary email is sent after each run.
 
-| Table | Description |
+## Gold Tables
+
+| Table | What it shows |
 |---|---|
-| `customer_360` | One row per customer: branch, account count, total balance, transaction count and amount, latest credit score and risk grade, and a value segment (`HIGH_VALUE` / `MEDIUM_VALUE` / `LOW_VALUE`) |
-| `branch_performance` | Branch-level customers, deposits and transactions |
-| `transaction_channel_summary` | Transaction volumes by channel / gateway / device |
-| `daily_bank_kpi` | Daily transaction totals alongside bank-wide customer, balance and credit metrics |
-| `risk_customer_summary` | Customer counts, average credit score and overdue exposure by risk grade |
+| `customer_360` | One row per customer with their accounts, balance, transactions and credit risk |
+| `branch_performance` | Customers, deposits and transactions for each branch |
+| `transaction_channel_summary` | Transactions by channel, gateway and device |
+| `daily_bank_kpi` | Daily transaction totals and overall bank numbers |
+| `risk_customer_summary` | Number of customers in each credit risk group |
 
 ## Dashboard
 
-A Lakeview dashboard (`05_Dashboard/NeoBank_Dashboard.lvdash.json`) built on the gold tables, with KPI counters (customers, deposits, transactions, high-risk customers), customer segment and credit risk distributions, branch performance, and device/gateway transaction breakdowns.
+A dashboard is built on the Gold tables. It shows:
+- Total customers, deposits and transactions
+- High-risk customers
+- Customer groups and credit risk groups
+- Branch performance
+- Transactions by device and gateway
 
-<!-- TODO: Add screenshots, e.g. ![Dashboard](docs/dashboard.png) -->
-
-## Repository Structure
+## Project Folders
 
 ```
 .
-├── 00_Source_Files/
-│   ├── 01_SQL_Server/        # DDL, historical inserts, incremental inserts
-│   └── 02_Blob/              # credit bureau + payment gateway CSVs (initial + incremental)
-├── 01_Setup_Metadata/        # control tables, seed metadata, metadata checks
-├── 02_Source_to_Silver/      # secret scope setup, metadata readers, bronze + silver loads
-├── 03_Silver_to_Gold/
-│   ├── 01_Silver_to_Gold_Driver.py
-│   └── gold_transformations/ # one notebook per gold table
-├── 04_Email_Notification/    # run summary email
-├── 05_Dashboard/             # Lakeview dashboard export
+├── 00_Source_Files/        # SQL scripts and CSV files (sample data)
+├── 01_Setup_Metadata/      # creates the settings and log tables
+├── 02_Source_to_Silver/    # loads data into Bronze and Silver
+├── 03_Silver_to_Gold/      # creates the Gold tables
+├── 04_Email_Notification/  # sends the run summary email
+├── 05_Dashboard/           # dashboard file
 └── README.md
 ```
 
 ## How to Run
 
-**Prerequisites:** a Databricks workspace with Unity Catalog, a SQL Server instance reachable from Databricks, and permission to create a catalog and secret scope.
+1. Create the tables in SQL Server and load the sample data from `00_Source_Files`.
+2. Upload the CSV files to the Databricks folder (Volume).
+3. Run the setup notebooks in `01_Setup_Metadata`.
+4. Create a Databricks Job with these steps in order: Source to Bronze, Bronze to Silver, Silver to Gold, Email.
+5. Run the job once for the first load.
+6. Add the new sample data and run the job again to see the second load.
+7. Import the dashboard file into Databricks.
 
-1. **Create the source data:** run the scripts in `00_Source_Files/01_SQL_Server/` on SQL Server (`01_Create_Tables` → `02_Insert_Historical_data`). Upload the initial CSVs to the Volume folders created by the setup notebook (`credit_bureau_reports/`, `payment_gateway_logs/`).
-2. **Configure secrets:** edit and run `00_Setup_Secret_Scope.py` with your own connection details. Never commit real credentials.
-3. **Set up metadata:** run `01_Setup_Metadata.sql`, then `02_Check_Metadata.sql` to verify.
-4. **Create a Databricks Job** with tasks in this order: read tables list → read table parameters → source to bronze → bronze to silver → silver to gold → email notification. Pass `run_id`, `table_metadata` and `table_parameters` between tasks using task values or job parameters.
-5. **First run:** the historical load. **Second run:** load `03_Incrementat_data.sql` and the `*_incremental.csv` files, then re-run the job to see the watermark-based incremental behaviour.
-6. **Import the dashboard:** import `NeoBank_Dashboard.lvdash.json` into Databricks Lakeview.
-7. **Email:** store a Gmail app password in the secret scope and change the sender and recipient addresses in the notification notebook.
+## What Can Be Improved
 
-## Known Limitations and Roadmap
+This is a learning project, and there are things I would improve:
 
-Being upfront about what would be improved for production use:
+- The Silver layer does only light cleaning. More data quality checks can be added.
+- The Gold tables are rebuilt fully on every run.
+- There are no automated tests yet.
+- Re-running a step may load some rows twice.
 
-- **Silver layer is light:** it mainly adds audit columns. Type standardisation, deduplication and data quality rules are planned.
-- **MERGE assumes one row per key per batch:** duplicates within a batch would fail the merge, so a "latest record per key" step is needed.
-- **Idempotency:** re-running Bronze before Silver can re-append rows because the watermark advances only after Silver.
-- **Credit bureau history:** MERGE overwrites prior records, so history is lost. SCD Type 2 or append would preserve it.
-- **Gold tables are fully rebuilt** on every run (`CREATE OR REPLACE`), not incrementally.
-- **No dimensional model, automated tests, CI/CD or infrastructure-as-code** yet.
-- **Watermarks are stored as strings;** typed comparisons would be safer.
-- **Notification** uses SMTP with a personal Gmail account; a workspace-native alert or service account is preferable.
-
-## Author
+## About Me
 
 **Your Name**
 [LinkedIn](https://linkedin.com/in/your-profile) · [GitHub](https://github.com/your-username) · your.email@example.com
