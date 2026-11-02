@@ -112,7 +112,15 @@ This is a learning project, and there are things I would improve:
 - There are no automated tests yet.
 - Re-running a step may load some rows twice.
 
-## About Me
+---
 
-**Your Name**
-[LinkedIn](https://linkedin.com/in/your-profile) · [GitHub](https://github.com/your-username) · your.email@example.com
+## 👨‍💻 About the Author
+
+**Surajkumar Bevnale**
+Data Analyst | SQL • Excel • Power BI • Python
+B.Tech, Engineering Physics, IIT Ropar (2023–2027)
+
+- 📫 Reach me at: surajk.b168@gmail.com
+- 🔗 LinekdIn: [Surajkumar B](https://www.linkedin.com/in/skb168/)
+---
+
